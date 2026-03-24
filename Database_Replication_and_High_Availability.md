@@ -1,4 +1,5 @@
 # Database Replication and High Availability
+
 ## How PostgreSQL Keeps Running When Everything Tries to Break It
 
 > Replication is not a backup strategy. Failover is not a fire drill. High availability is not a feature you add later. This guide is about understanding the real mechanics — so that when a primary dies at 3 AM, you already know exactly what to do.
@@ -86,6 +87,7 @@ A single PostgreSQL instance means that when the machine running it fails — ha
 A replica changes this: you already have a warm (or hot) copy of the data, continuously updated, ready to accept connections. The question is no longer "how fast can we restore?" but "how fast can we redirect traffic?"
 
 The failure modes a replica protects against:
+
 - Physical server failure (disk, CPU, power, NIC)
 - OS-level failure requiring a reboot
 - PostgreSQL process crash requiring restart
@@ -93,6 +95,7 @@ The failure modes a replica protects against:
 - Accidental or malicious data destruction (with delayed replicas — see Section 4.3)
 
 The failure modes a replica does **not** protect against:
+
 - Logical data corruption (a bad UPDATE runs on the primary and replicates to all replicas)
 - Human error that replicates before you catch it
 - These are backup problems, not replication problems
@@ -188,6 +191,7 @@ ps aux | grep "wal sender"
 ```
 
 The WAL sender:
+
 1. Reads WAL from `pg_wal/` starting from the replica's current LSN (Log Sequence Number)
 2. Streams WAL records over the replication connection
 3. Receives confirmation (feedback) from the replica: which LSN has been written, flushed, and applied
@@ -201,6 +205,7 @@ ps aux | grep "wal receiver"
 ```
 
 The WAL receiver:
+
 1. Connects to the primary using `primary_conninfo`
 2. Sends its current LSN (so the primary knows where to start streaming)
 3. Receives WAL records and writes them to the replica's `pg_wal/`
@@ -230,6 +235,7 @@ Replica's data files reflect LSN X
 ```
 
 `pg_stat_replication` shows each phase as a `INTERVAL`:
+
 - `write_lag`: time between primary flush and replica write to disk
 - `flush_lag`: time between primary flush and replica fsync
 - `replay_lag`: time between primary flush and replica applying to data files
@@ -268,6 +274,7 @@ synchronous_standby_names = 'FIRST 1 (replica1, replica2)'
 ```
 
 The replica advertises its name via:
+
 ```ini
 # postgresql.conf on replica
 application_name = 'replica1'
@@ -279,13 +286,13 @@ application_name = 'replica1'
 
 `synchronous_commit` is the most nuanced knob in replication configuration. It controls what the primary waits for before confirming a commit to the client.
 
-| Value | Meaning | Durability | Performance |
-|-------|---------|------------|-------------|
-| `off` | Don't wait for local WAL flush | No guarantee — data can be lost on primary crash | Fastest |
-| `local` | Wait for local WAL flush only | Primary durability, no replica guarantee | Fast |
-| `remote_write` | Wait for replica to write WAL to OS buffer | Replica OS buffer (lost if OS crashes) | Medium |
-| `remote_apply` | Wait for replica to apply WAL to data files | Replica can serve this data immediately | Slower |
-| `on` (default) | Wait for replica to flush WAL to disk | Full synchronous durability | Slowest |
+| Value          | Meaning                                     | Durability                                       | Performance |
+| -------------- | ------------------------------------------- | ------------------------------------------------ | ----------- |
+| `off`          | Don't wait for local WAL flush              | No guarantee — data can be lost on primary crash | Fastest     |
+| `local`        | Wait for local WAL flush only               | Primary durability, no replica guarantee         | Fast        |
+| `remote_write` | Wait for replica to write WAL to OS buffer  | Replica OS buffer (lost if OS crashes)           | Medium      |
+| `remote_apply` | Wait for replica to apply WAL to data files | Replica can serve this data immediately          | Slower      |
+| `on` (default) | Wait for replica to flush WAL to disk       | Full synchronous durability                      | Slowest     |
 
 The default `on` means a commit waits for the replica to flush WAL (fsync) — not just write to the OS buffer. This is the strongest guarantee.
 
@@ -349,6 +356,7 @@ Patroni (Section 8) manages slot lifecycle automatically: it creates and drops s
 This is the complete walkthrough. Every command. Every file. No gaps.
 
 **Environment:**
+
 - Primary: `10.0.0.10`, PostgreSQL 16
 - Replica: `10.0.0.11`, PostgreSQL 16 (same version required for physical replication)
 - PostgreSQL data directory: `/var/lib/postgresql/16/main`
@@ -410,6 +418,7 @@ host    replication     replicator      10.0.0.11/32            scram-sha-256
 ```
 
 Reload:
+
 ```bash
 sudo -u postgres psql -c "SELECT pg_reload_conf();"
 ```
@@ -684,16 +693,19 @@ SELECT pg_wal_replay_resume();
 ### 4.4 When to Act on Lag vs When to Accept It
 
 **Act immediately if:**
+
 - Lag is growing continuously (the replica is falling further behind with no sign of catching up)
 - Byte-lag exceeds 10 GB (the replica might need a full reinitialize if the primary's WAL rotates faster than `wal_keep_size`)
 - A replication slot has inactive=true and its `restart_lsn` is not advancing (disk bloat imminent)
 
 **Accept it if:**
+
 - Lag spikes during a known write burst (bulk import, end-of-month report run) but recovers afterward
 - Cross-region async replica lags by 200-500ms consistently — this is the physics of the network
 - A delayed replica shows 2 hours of lag — that's by design
 
 **Never accept:**
+
 - Lag on a synchronous replica (by definition it cannot lag while synchronous_commit is active; if it appears to lag in monitoring, something is wrong with your monitoring)
 - Growing byte-lag on any replica used for failover — this is your RPO materializing
 
@@ -707,15 +719,15 @@ Physical (streaming) replication copies the raw WAL binary stream. The replica a
 
 Logical replication decodes the WAL into logical operations — `INSERT`, `UPDATE`, `DELETE` at the row level — and applies those to a subscriber. The subscriber can be a different PostgreSQL version, a different schema, or even a non-PostgreSQL database.
 
-| Property | Physical/Streaming | Logical |
-|----------|-------------------|---------|
-| Granularity | Entire cluster | Per-table, per-publication |
-| Cross-version | No (must match major version) | Yes (source and dest can differ) |
-| Subscriber can write | No (read-only standby) | Yes |
-| DDL replication | Yes (everything) | No (DDL not replicated) |
-| Sequence replication | Yes | No |
-| Overhead | Lower | Higher (decoding cost) |
-| Primary use case | HA, failover | Selective sync, upgrades, ETL |
+| Property             | Physical/Streaming            | Logical                          |
+| -------------------- | ----------------------------- | -------------------------------- |
+| Granularity          | Entire cluster                | Per-table, per-publication       |
+| Cross-version        | No (must match major version) | Yes (source and dest can differ) |
+| Subscriber can write | No (read-only standby)        | Yes                              |
+| DDL replication      | Yes (everything)              | No (DDL not replicated)          |
+| Sequence replication | Yes                           | No                               |
+| Overhead             | Lower                         | Higher (decoding cost)           |
+| Primary use case     | HA, failover                  | Selective sync, upgrades, ETL    |
 
 ### 5.2 Publications and Subscriptions
 
@@ -959,6 +971,7 @@ DETAIL: User query might have needed to see row versions that must be removed.
 ```
 
 The conflicts arise from:
+
 - **Vacuum:** Primary vacuums dead rows; replica must remove them. Running queries on replica reading those rows conflict.
 - **Lock conflicts:** DDL on the primary acquires exclusive locks; this is replicated as a WAL record that the replica must apply.
 - **Dropped tablespace:** Queries using a tablespace that is being dropped.
@@ -998,6 +1011,7 @@ The cost: the primary's MVCC horizon is held back by the replica's oldest transa
 Every PostgreSQL connection is a full OS process. This is reliable, isolated, and simple — and it does not scale beyond a few hundred connections.
 
 The costs:
+
 - Each idle connection consumes ~5–10 MB of RAM (backend process overhead)
 - Each active connection with `work_mem = 64MB` can consume 64+ MB under sort pressure
 - 1000 connections × 10 MB = 10 GB of overhead before any actual work
@@ -1018,11 +1032,11 @@ PgBouncer multiplexes many client connections onto fewer server connections. The
 
 **Statement pooling:** A server connection is held only for a single SQL statement. Most restrictive. Breaks anything that uses multi-statement sequences (explicit transactions, prepared statements, `SET` commands that persist state). Not practical for OLTP.
 
-| Mode | Server connections held | Multiplexing | Compatibility |
-|------|------------------------|--------------|---------------|
-| Session | Per client session | None | Full |
-| Transaction | Per transaction | High | Most apps |
-| Statement | Per statement | Maximum | Very limited |
+| Mode        | Server connections held | Multiplexing | Compatibility |
+| ----------- | ----------------------- | ------------ | ------------- |
+| Session     | Per client session      | None         | Full          |
+| Transaction | Per transaction         | High         | Most apps     |
+| Statement   | Per statement           | Maximum      | Very limited  |
 
 ### 7.3 Complete pgbouncer.ini Configuration
 
@@ -1252,6 +1266,7 @@ sudo systemctl start postgresql@16-main
 Patroni is the industry-standard solution for automatic PostgreSQL failover. It is a Python daemon that runs on each PostgreSQL server and manages the cluster as a whole.
 
 **What Patroni does:**
+
 - Manages PostgreSQL start/stop/promote
 - Uses a distributed consensus store (DCS) — etcd, Consul, or ZooKeeper — as a single source of truth for "who is the primary"
 - Automatically promotes a replica when the primary fails
@@ -1281,9 +1296,9 @@ Patroni is the industry-standard solution for automatic PostgreSQL failover. It 
 **Patroni configuration (patroni.yml):**
 
 ```yaml
-scope: postgres-cluster    # Cluster name — must match across all nodes
-namespace: /db/            # Key prefix in DCS
-name: node1                # This node's name
+scope: postgres-cluster # Cluster name — must match across all nodes
+namespace: /db/ # Key prefix in DCS
+name: node1 # This node's name
 
 restapi:
   listen: 0.0.0.0:8008
@@ -1297,23 +1312,23 @@ etcd3:
 
 bootstrap:
   dcs:
-    ttl: 30                    # Leader lease duration in seconds
-    loop_wait: 10              # How often Patroni checks DCS
+    ttl: 30 # Leader lease duration in seconds
+    loop_wait: 10 # How often Patroni checks DCS
     retry_timeout: 10
-    maximum_lag_on_failover: 1048576   # 1 MB — don't promote replica with > 1MB lag
+    maximum_lag_on_failover: 1048576 # 1 MB — don't promote replica with > 1MB lag
     postgresql:
-      use_pg_rewind: true      # Use pg_rewind to rejoin old primary after failover
+      use_pg_rewind: true # Use pg_rewind to rejoin old primary after failover
       use_slots: true
       parameters:
         wal_level: replica
         hot_standby: on
         max_wal_senders: 10
         max_replication_slots: 10
-        wal_log_hints: on      # Required for pg_rewind
+        wal_log_hints: on # Required for pg_rewind
 
   initdb:
     - encoding: UTF8
-    - data-checksums          # Highly recommended
+    - data-checksums # Highly recommended
 
 postgresql:
   listen: 0.0.0.0:5432
@@ -1330,9 +1345,9 @@ postgresql:
       password: postgres_password
 
 tags:
-  nofailover: false     # Set true to prevent this node from being promoted
-  noloadbalance: false  # Set true to exclude from load balancing
-  clonefrom: false      # Set true to prefer this node as clone source
+  nofailover: false # Set true to prevent this node from being promoted
+  noloadbalance: false # Set true to exclude from load balancing
+  clonefrom: false # Set true to prefer this node as clone source
 ```
 
 ### 8.3 The Split-Brain Problem
@@ -1496,6 +1511,7 @@ This is the most common production HA pattern. It balances durability, availabil
 ```
 
 **Properties:**
+
 - RPO = 0 for single-node failure (sync replica has all committed data)
 - RPO > 0 for region failure (async replica may lag)
 - RTO = 30–60 seconds with Patroni automatic failover
@@ -1535,6 +1551,7 @@ DNS / Global Load Balancer:
 **Cross-region replication is always asynchronous** due to network latency. Acknowledge this in your SLA: cross-region failover has RPO > 0. How much data loss depends on your write rate and the network latency. For 100 writes/second with 100ms of lag, you may lose ~10 transactions on a regional failover.
 
 **Patroni in multi-region:** Patroni requires a DCS cluster. Running etcd across regions adds latency to leader lease operations. Options:
+
 - Run etcd in the primary region only; use a witness node approach for the remote region
 - Use Consul with WAN federation
 - Accept that cross-region automatic failover is slow or requires human confirmation
@@ -1546,11 +1563,13 @@ Most teams choose: automatic failover within a region (sub-60s), manual/semi-aut
 Before choosing an HA architecture, define these numbers explicitly. Everything else follows.
 
 **RPO (Recovery Point Objective):** How much data loss is acceptable? Measured in time or transactions.
+
 - RPO = 0: Zero data loss. Requires synchronous replication. Commits are slower.
 - RPO = 1 minute: Accept losing up to 1 minute of writes. Allows async replication.
 - RPO = 24 hours: Daily backups are sufficient. No replication needed for DR.
 
 **RTO (Recovery Time Objective):** How long can the service be unavailable?
+
 - RTO = 30 seconds: Requires Patroni or equivalent automatic failover.
 - RTO = 5 minutes: Manual failover with a prepared runbook is feasible.
 - RTO = 1 hour: Restoring from backup is acceptable.
@@ -1573,13 +1592,13 @@ RPO < 24 hours, RTO < 4 hours:
 
 These are frequently confused. They solve different problems and are not substitutes for each other.
 
-| | Replication | Backup |
-|--|-------------|--------|
-| Protects against | Hardware failure, server crash, AZ failure | Data corruption, human error, ransomware |
-| Latency | Real-time | Point-in-time (daily/hourly) |
-| Recovery target | Current state of data | Any past point in time |
-| Does it copy bad data? | Yes — a DELETE replicates immediately | Depends on RPO: PITR can go back |
-| Disk usage | ~1× data size per replica | Varies (incremental backups are smaller) |
+|                        | Replication                                | Backup                                   |
+| ---------------------- | ------------------------------------------ | ---------------------------------------- |
+| Protects against       | Hardware failure, server crash, AZ failure | Data corruption, human error, ransomware |
+| Latency                | Real-time                                  | Point-in-time (daily/hourly)             |
+| Recovery target        | Current state of data                      | Any past point in time                   |
+| Does it copy bad data? | Yes — a DELETE replicates immediately      | Depends on RPO: PITR can go back         |
+| Disk usage             | ~1× data size per replica                  | Varies (incremental backups are smaller) |
 
 A scenario that replication alone cannot solve: a developer runs `UPDATE orders SET amount = 0` without a WHERE clause. This replicates to all replicas in milliseconds. Every replica now has zeroed-out amounts. Your replication is working perfectly — perfectly replicating destruction.
 
@@ -1613,30 +1632,31 @@ This view exists on the **primary** and has one row per connected standby.
 SELECT * FROM pg_stat_replication;
 ```
 
-| Column | Type | Meaning |
-|--------|------|---------|
-| `pid` | integer | PID of the WAL sender process on the primary |
-| `usesysid` | oid | OID of the replication user |
-| `usename` | name | Name of the replication user |
-| `application_name` | text | `application_name` set on the replica's `primary_conninfo` |
-| `client_addr` | inet | IP address of the replica |
-| `client_hostname` | text | Hostname if reverse DNS resolves |
-| `client_port` | integer | Ephemeral port on the replica |
-| `backend_start` | timestamptz | When this WAL sender started (i.e., when the replica connected) |
-| `backend_xmin` | xid | Oldest transaction ID needed on primary due to this standby's feedback |
-| `state` | text | `startup`, `catchup`, `streaming`, `backup`, `stopping` |
-| `sent_lsn` | pg_lsn | Last WAL position sent to this standby |
-| `write_lsn` | pg_lsn | Last WAL position written to disk on standby |
-| `flush_lsn` | pg_lsn | Last WAL position flushed (fsync'd) on standby |
-| `replay_lsn` | pg_lsn | Last WAL position applied to standby's data files |
-| `write_lag` | interval | Time elapsed between primary flush and standby write |
-| `flush_lag` | interval | Time elapsed between primary flush and standby flush |
-| `replay_lag` | interval | Time elapsed between primary flush and standby replay |
-| `sync_priority` | integer | Priority of this standby for synchronous replication (0 = async) |
-| `sync_state` | text | `async`, `sync`, `potential`, `quorum` |
-| `reply_time` | timestamptz | Last time this standby sent a status reply to the primary |
+| Column             | Type        | Meaning                                                                |
+| ------------------ | ----------- | ---------------------------------------------------------------------- |
+| `pid`              | integer     | PID of the WAL sender process on the primary                           |
+| `usesysid`         | oid         | OID of the replication user                                            |
+| `usename`          | name        | Name of the replication user                                           |
+| `application_name` | text        | `application_name` set on the replica's `primary_conninfo`             |
+| `client_addr`      | inet        | IP address of the replica                                              |
+| `client_hostname`  | text        | Hostname if reverse DNS resolves                                       |
+| `client_port`      | integer     | Ephemeral port on the replica                                          |
+| `backend_start`    | timestamptz | When this WAL sender started (i.e., when the replica connected)        |
+| `backend_xmin`     | xid         | Oldest transaction ID needed on primary due to this standby's feedback |
+| `state`            | text        | `startup`, `catchup`, `streaming`, `backup`, `stopping`                |
+| `sent_lsn`         | pg_lsn      | Last WAL position sent to this standby                                 |
+| `write_lsn`        | pg_lsn      | Last WAL position written to disk on standby                           |
+| `flush_lsn`        | pg_lsn      | Last WAL position flushed (fsync'd) on standby                         |
+| `replay_lsn`       | pg_lsn      | Last WAL position applied to standby's data files                      |
+| `write_lag`        | interval    | Time elapsed between primary flush and standby write                   |
+| `flush_lag`        | interval    | Time elapsed between primary flush and standby flush                   |
+| `replay_lag`       | interval    | Time elapsed between primary flush and standby replay                  |
+| `sync_priority`    | integer     | Priority of this standby for synchronous replication (0 = async)       |
+| `sync_state`       | text        | `async`, `sync`, `potential`, `quorum`                                 |
+| `reply_time`       | timestamptz | Last time this standby sent a status reply to the primary              |
 
 `sync_state` values:
+
 - `async`: not in `synchronous_standby_names`, never waited on
 - `potential`: listed in `synchronous_standby_names` but not currently the active sync standby
 - `sync`: the active synchronous standby — commits wait for this one
@@ -1813,15 +1833,15 @@ ORDER BY status DESC, type, name;
 
 These are the conditions that require immediate action:
 
-| Condition | Severity | Query |
-|-----------|----------|-------|
-| No replicas connected | CRITICAL | `SELECT count(*) FROM pg_stat_replication` = 0 |
-| Sync replica not `streaming` | CRITICAL | `state != 'streaming' AND sync_state = 'sync'` |
-| Replication slot inactive with >10 GB retained | CRITICAL | `NOT active AND retained_bytes > 10GB` |
-| Replica not sending replies for >2 minutes | WARNING | `now() - reply_time > INTERVAL '2 minutes'` |
-| Replay lag > 30 seconds (for latency-sensitive replicas) | WARNING | `replay_lag > INTERVAL '30 seconds'` |
-| Byte lag >1 GB and growing | WARNING | Trend in `lag_bytes` over time |
-| WAL directory > 80% of disk | CRITICAL | `pg_ls_waldir()` total vs disk capacity |
+| Condition                                                | Severity | Query                                          |
+| -------------------------------------------------------- | -------- | ---------------------------------------------- |
+| No replicas connected                                    | CRITICAL | `SELECT count(*) FROM pg_stat_replication` = 0 |
+| Sync replica not `streaming`                             | CRITICAL | `state != 'streaming' AND sync_state = 'sync'` |
+| Replication slot inactive with >10 GB retained           | CRITICAL | `NOT active AND retained_bytes > 10GB`         |
+| Replica not sending replies for >2 minutes               | WARNING  | `now() - reply_time > INTERVAL '2 minutes'`    |
+| Replay lag > 30 seconds (for latency-sensitive replicas) | WARNING  | `replay_lag > INTERVAL '30 seconds'`           |
+| Byte lag >1 GB and growing                               | WARNING  | Trend in `lag_bytes` over time                 |
+| WAL directory > 80% of disk                              | CRITICAL | `pg_ls_waldir()` total vs disk capacity        |
 
 For alerting, write a monitoring script that runs the health report query and sends to PagerDuty / OpsGenie / Slack when any row has status != 'OK'. Run it every 30 seconds.
 
@@ -1855,7 +1875,8 @@ SELECT
 
 **Root causes and fixes:**
 
-*Slow replica disk:* WAL replay is I/O bound. The startup process applies WAL records faster than the disk can handle the random writes.
+_Slow replica disk:_ WAL replay is I/O bound. The startup process applies WAL records faster than the disk can handle the random writes.
+
 ```bash
 # Check disk I/O on replica
 iostat -x 1 10
@@ -1863,7 +1884,8 @@ iostat -x 1 10
 # Fix: upgrade to faster storage (NVMe), or use a separate WAL disk
 ```
 
-*Conflicting queries on hot standby:* Long queries on the replica block WAL replay.
+_Conflicting queries on hot standby:_ Long queries on the replica block WAL replay.
+
 ```sql
 -- On replica: check for blocked recovery
 SELECT pid, query_start, query, wait_event_type, wait_event
@@ -1876,9 +1898,11 @@ FROM pg_stat_activity
 WHERE state = 'active'
 ORDER BY duration DESC;
 ```
+
 Fix: reduce `max_standby_streaming_delay` or cancel long queries manually, or switch analytics workload to a dedicated replica with `hot_standby_feedback = on`.
 
-*The replica is too far behind to stream (needs reinitialize):*
+_The replica is too far behind to stream (needs reinitialize):_
+
 ```bash
 # If wal_keep_size on primary has rotated past the replica's restart_lsn,
 # the primary will refuse streaming and the replica falls into 'startup' state
@@ -1974,6 +1998,7 @@ patronictl -c /etc/patroni/patroni.yml list
 Patroni's `maximum_lag_on_failover` setting rejects replicas that are too far behind. If node3 is 4 MB behind and `maximum_lag_on_failover = 1048576` (1 MB), Patroni will not promote node3. This prevents promoting a stale replica.
 
 **After promoting the wrong replica:** You have data loss. If the correct replica (the one further ahead) is still running as a primary (split-brain avoided by Patroni/fencing), you need to:
+
 1. Dump the data that was on the further-ahead replica but not on the incorrectly-promoted one
 2. Import it into the now-promoted primary
 3. This is a manual data reconciliation. There is no automatic fix.
@@ -1989,6 +2014,7 @@ Common failures:
 **Connection pool holds stale connections.** PgBouncer or the ORM connection pool holds connections to the old primary. After failover, those connections are to a dead server. New connections succeed, but pooled connections fail.
 
 Fix: PgBouncer detects broken server connections on next use and replaces them. Set aggressive health check intervals:
+
 ```ini
 # pgbouncer.ini
 server_check_delay = 10    # Check server health every 10 seconds
